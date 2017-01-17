@@ -119,8 +119,5 @@ for kind in kinds:
     model = type(str(kind), (ndb.Expando,), {})
     iterator._item_to_value = lambda parent, pb: model._from_pb(convert_protobuf_entity(pb))
 
-    #test_ndb_entity = model(key=ndb.Key(model, '0'), number=2, rating_recalculation_in_progress=True)
-    #test_ndb_entity_pb = test_ndb_entity._to_pb()
-
     for ndb_entity in iterator:
         ndb_entity.put(use_cache=False, use_memcache=False)
