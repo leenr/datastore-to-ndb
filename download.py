@@ -107,6 +107,9 @@ def convert_protobuf_entity(pb3):
                     elif type_name == 'array':
                         assert len(value.values) == 0
                         pb2_prop.set_meaning(pb2_prop.EMPTY_LIST)
+                    elif type_name == 'blob':
+                        pb2_prop.set_meaning(pb2_prop.BLOB)
+                        pb2_value.set_stringvalue(value)
                     else:
                         type_name = {
                             'integer': 'int64'
