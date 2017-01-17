@@ -1,4 +1,5 @@
 import json
+import logging
 from sys import argv
 
 from google.cloud import datastore
@@ -6,6 +7,9 @@ from google.cloud import datastore
 from google.appengine.ext import ndb
 from google.appengine.datastore.entity_pb import EntityProto, PropertyValue_ReferenceValue, Reference
 from google.net.proto import ProtocolBuffer
+
+
+PUT_BATCH_SIZE = 500
 
 
 def convert_protobuf_key_element(path_element, pb2_path_element):
@@ -113,11 +117,34 @@ kinds = argv[2].split(',')
 
 client = datastore.Client(project=project)
 for kind in kinds:
+    print('Copying {}...'.format(kind))
+
+    kind_stat_query = client.query(kind='__Stat_Kind__', )
+    kind_stat_query.add_filter('kind_name', '=', kind)
+    kind_stats = list(kind_stat_query.fetch(1))
+
+    kind_stat = None
+    entities_count = None
+    if len(kind_stats) > 0:
+        kind_stat = kind_stats[0]
+        entities_count = kind_stat['count']
+
     query = client.query(kind=kind)
     iterator = query.fetch()
 
+    # Patch _item_to_value of google.cloud.iterator.Iterator to call convert_protobuf_entity
+    #   for each protobuf object returned by Google Datastore
     model = type(str(kind), (ndb.Expando,), {})
     iterator._item_to_value = lambda parent, pb: model._from_pb(convert_protobuf_entity(pb))
 
-    for ndb_entity in iterator:
-        ndb_entity.put(use_cache=False, use_memcache=False)
+    put_batch = []
+    for i, ndb_entity in enumerate(iterator):
+        put_batch.append(ndb_entity)
+        if len(put_batch) >= PUT_BATCH_SIZE:
+            ndb.put_multi(put_batch, use_cache=False, use_memcache=False)
+            del put_batch[:]
+            if entities_count:
+                copied = i + 1
+                print('  Estimated completion: {:.2f}% ({}/{})'.format(float(copied) / entities_count * 100, copied, entities_count))
+
+    ndb.put_multi(put_batch, use_cache=False, use_memcache=False)
