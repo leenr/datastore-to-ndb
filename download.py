@@ -9,7 +9,7 @@ from google.appengine.datastore.entity_pb import EntityProto, PropertyValue_Refe
 from google.net.proto import ProtocolBuffer
 
 
-PUT_BATCH_SIZE = 500
+PUT_BATCH_SIZE = 100
 
 
 def convert_protobuf_key_element(path_element, pb2_path_element):
