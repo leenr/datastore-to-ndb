@@ -1,6 +1,7 @@
 import json
 import logging
 from sys import argv
+from threading import Semaphore, Thread
 
 from google.cloud import datastore
 
@@ -10,6 +11,9 @@ from google.net.proto import ProtocolBuffer
 
 
 PUT_BATCH_SIZE = 100
+KINDS_CONCURRENT = 2 # concurrent copy threads, None for no limit
+USE_CACHE = False # use ndb cache and memcache on put_multi
+ACTUALLY_PUT = True # set to False for not .put_multi(), somewhere useful for testing
 
 
 def convert_protobuf_key_element(path_element, pb2_path_element):
@@ -112,14 +116,19 @@ def convert_protobuf_entity(pb3):
     return pb2
 
 
-project = argv[1]
-kinds = argv[2].split(',')
+def flush_ndb_batch(batch):
+    if ACTUALLY_PUT:
+        ndb.put_multi(batch, use_memcache=USE_CACHE)
+    del batch[:]
 
-client = datastore.Client(project=project)
-for kind in kinds:
-    print('Copying {}...'.format(kind))
 
-    kind_stat_query = client.query(kind='__Stat_Kind__', )
+def worker(client, kind, semaphore=None):
+    if semaphore:
+        semaphore.acquire(blocking=True)
+
+    print('{}: started'.format(kind))
+
+    kind_stat_query = client.query(kind='__Stat_Kind__')
     kind_stat_query.add_filter('kind_name', '=', kind)
     kind_stats = list(kind_stat_query.fetch(1))
 
@@ -128,6 +137,9 @@ for kind in kinds:
     if len(kind_stats) > 0:
         kind_stat = kind_stats[0]
         entities_count = kind_stat['count']
+        print('{}: ~{} entities (by __Stat_Kind__)'.format(kind, entities_count))
+    else:
+        print('{}: entities count unknown (no __Stat_Kind__)'.format(kind))
 
     query = client.query(kind=kind)
     iterator = query.fetch()
@@ -138,13 +150,38 @@ for kind in kinds:
     iterator._item_to_value = lambda parent, pb: model._from_pb(convert_protobuf_entity(pb))
 
     put_batch = []
+    i = -1
     for i, ndb_entity in enumerate(iterator):
         put_batch.append(ndb_entity)
         if len(put_batch) >= PUT_BATCH_SIZE:
-            ndb.put_multi(put_batch, use_cache=False, use_memcache=False)
-            del put_batch[:]
+            flush_ndb_batch(put_batch)
             if entities_count:
                 copied = i + 1
-                print('  Estimated completion: {:.2f}% ({}/{})'.format(float(copied) / entities_count * 100, copied, entities_count))
+                print('{}: estimated completion - {:.2f}% ({}/{})'.format(kind, float(copied) / entities_count * 100, copied, entities_count))
 
-    ndb.put_multi(put_batch, use_cache=False, use_memcache=False)
+    copied = i + 1
+
+    flush_ndb_batch(put_batch)
+
+    print('{}: completed, copied {} entities'.format(kind, copied))
+
+    if semaphore:
+        semaphore.release()
+
+
+project, kinds = argv[1], argv[2].split(',')
+
+threads = []
+
+semaphore = Semaphore(KINDS_CONCURRENT) if KINDS_CONCURRENT else None
+client = datastore.Client(project=project)
+for kind in kinds:
+    thread = Thread(target=worker, args=(client, kind, semaphore))
+    thread.start()
+    threads.append(thread)
+
+# wait all threads to complete
+for thread in threads:
+    thread.join()
+
+print('Copied {} kinds successfully'.format(', '.join(kinds)))
