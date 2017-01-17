@@ -110,6 +110,9 @@ def convert_protobuf_entity(pb3):
                     elif type_name == 'blob':
                         pb2_prop.set_meaning(pb2_prop.BLOB)
                         pb2_value.set_stringvalue(value)
+                    elif type_name == 'string':
+                        str_value = value.encode('utf-8') if isinstance(value, unicode) else value
+                        pb2_value.set_stringvalue(str_value)
                     else:
                         type_name = {
                             'integer': 'int64'
